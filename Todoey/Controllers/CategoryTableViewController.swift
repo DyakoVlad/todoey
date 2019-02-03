@@ -7,28 +7,44 @@
 //
 
 import UIKit
-import CoreData
+import RealmSwift
+import ChameleonFramework
 
-class CategoryTableViewController: UITableViewController {
+class CategoryTableViewController: SwipeTableViewController {
     
-    var categoryArray = [Category]()
-    let context = (UIApplication.shared.delegate as! AppDelegate).persistentContainer.viewContext
+    let realm = try! Realm()
+    var categories: Results<Category>?
+    @IBOutlet weak var searchBar: UISearchBar!
     
     override func viewDidLoad() {
         super.viewDidLoad()
         loadCategories()
     }
     
+    override func viewWillAppear(_ animated: Bool) {
+        guard let navBar = navigationController?.navigationBar else { fatalError() }
+        navBar.barTintColor = FlatWhite()
+        navBar.tintColor = ContrastColorOf(FlatWhite(), returnFlat: true)
+        navBar.largeTitleTextAttributes = [NSAttributedString.Key.foregroundColor: ContrastColorOf(FlatWhite(), returnFlat: true)]
+        searchBar.barTintColor = FlatWhite()
+    }
+    
     //MARK: Tableview Datasource Methods
     
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return categoryArray.count
+        return categories?.count ?? 1
     }
     
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "CategoryCell", for: indexPath)
-        cell.textLabel?.text = categoryArray[indexPath.row].name
-        
+        let cell = super.tableView(tableView, cellForRowAt: indexPath)
+        if let category = categories?[indexPath.row] {
+            cell.textLabel?.text = category.name
+            guard let cellColor = UIColor(hexString: category.cellColour) else { fatalError() }
+            cell.backgroundColor = cellColor
+            cell.textLabel?.textColor = ContrastColorOf(cellColor, returnFlat: true)
+        } else {
+            cell.textLabel?.text = "No categories added yet"
+        }
         return cell
     }
     
@@ -36,13 +52,14 @@ class CategoryTableViewController: UITableViewController {
     
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         performSegue(withIdentifier: "goToItemsList", sender: self)
+        tableView.deselectRow(at: indexPath, animated: true)
     }
     
     override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
         let destinationVC = segue.destination as! ToDoListViewController
         
         if let indexPath = tableView.indexPathForSelectedRow {
-            destinationVC.selectCategory = categoryArray[indexPath.row]
+            destinationVC.selectCategory = categories?[indexPath.row]
         }
     }
     
@@ -53,10 +70,18 @@ class CategoryTableViewController: UITableViewController {
         
         let alert = UIAlertController(title: "Add new category", message: "", preferredStyle: .alert)
         let action = UIAlertAction(title: "Add", style: .default) { (action) in
-            let newCategory = Category(context: self.context)
-            newCategory.name = textField.text!
-            self.categoryArray.append(newCategory)
-            self.saveCategories()
+            do {
+                try self.realm.write {
+                    let newCategory = Category()
+                    newCategory.name = textField.text!
+                    newCategory.cellColour = RandomFlatColor().hexValue()
+                    self.realm.add(newCategory)
+                }
+            } catch {
+                print("Error with saving new category: \(error)")
+            }
+            self.tableView.reloadData()
+            
         }
         alert.addTextField { (addTextField) in
             addTextField.placeholder = "Enter new category here"
@@ -66,27 +91,22 @@ class CategoryTableViewController: UITableViewController {
         present(alert, animated: true, completion: nil)
     }
     
-    func saveCategories() {
-        if context.hasChanges {
-            do {
-                try context.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nserror = error as NSError
-                fatalError("Unresolved error \(nserror), \(nserror.userInfo)")
-            }
-        }
-        self.tableView.reloadData()
+    
+    func loadCategories() {
+        categories = realm.objects(Category.self)
+        tableView.reloadData()
     }
     
-    func loadCategories(with request: NSFetchRequest<Category> = Category.fetchRequest()) {
-        do {
-            categoryArray = try context.fetch(request)
-        } catch {
-            print("Error with fetching request \(error)")
+    override func deleteItem(atRow: Int) {
+        if let category = self.categories?[atRow] {
+            do {
+                try self.realm.write {
+                    self.realm.delete(category)
+                }
+            } catch {
+                print("Error with deleting category: \(error)")
+            }
         }
-        tableView.reloadData()
     }
     
 }
@@ -106,10 +126,8 @@ extension CategoryTableViewController: UISearchBarDelegate {
             }
         }
         else {
-            let request: NSFetchRequest<Category> = Category.fetchRequest()
-            request.predicate = NSPredicate(format: "name CONTAINS[cd] %@", searchBar.text!)
-            request.sortDescriptors = [NSSortDescriptor(key: "name", ascending: true)]
-            loadCategories(with: request)
+            categories = categories?.filter("name CONTAINS[cd] %@", searchBar.text!)
+            tableView.reloadData()
         }
     }
 }
